@@ -8,20 +8,22 @@ import com.example.prueba01.data.model.EmergencyLog
 import com.example.prueba01.data.model.EventType
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.PBEKeySpec
 
 class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_NAME, null, DATABASE_VERSION) {
 
     companion object {
         private const val DATABASE_NAME = "safedoor_database.db"
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
 
-        // Tabla Usuarios (Login con HASH SHA-256)
         private const val TABLE_USERS = "users"
         private const val COLUMN_USER_ID = "id"
         private const val COLUMN_USERNAME = "username"
         private const val COLUMN_PASSWORD_HASH = "password_hash"
+        private const val COLUMN_SALT = "salt"
 
-        // Tabla Historial de Eventos (Persistencia permanente de logs)
         private const val TABLE_LOGS = "emergency_logs"
         private const val COLUMN_LOG_ID = "id"
         private const val COLUMN_TIMESTAMP = "timestamp"
@@ -30,20 +32,22 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
         private const val COLUMN_EVENT_TYPE = "event_type"
         private const val COLUMN_GAS_LEVEL = "gas_level"
         private const val COLUMN_MESSAGE = "message"
+
+        private const val PBKDF2_ITERATIONS = 10000
+        private const val HASH_KEY_LENGTH = 256
     }
 
     override fun onCreate(db: SQLiteDatabase) {
-        // Crear Tabla Usuarios
         val createUsersTable = """
             CREATE TABLE $TABLE_USERS (
                 $COLUMN_USER_ID INTEGER PRIMARY KEY AUTOINCREMENT,
                 $COLUMN_USERNAME TEXT UNIQUE NOT NULL,
-                $COLUMN_PASSWORD_HASH TEXT NOT NULL
+                $COLUMN_PASSWORD_HASH TEXT NOT NULL,
+                $COLUMN_SALT TEXT NOT NULL
             )
         """.trimIndent()
         db.execSQL(createUsersTable)
 
-        // Crear Tabla Historial de Eventos
         val createLogsTable = """
             CREATE TABLE $TABLE_LOGS (
                 $COLUMN_LOG_ID TEXT PRIMARY KEY,
@@ -56,14 +60,6 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
             )
         """.trimIndent()
         db.execSQL(createLogsTable)
-
-        // Insertar usuario administrador por defecto: admin / admin123 (Guardando HASH SHA-256)
-        val defaultAdminHash = hashSha256("admin123")
-        val values = ContentValues().apply {
-            put(COLUMN_USERNAME, "admin")
-            put(COLUMN_PASSWORD_HASH, defaultAdminHash)
-        }
-        db.insert(TABLE_USERS, null, values)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -72,51 +68,85 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
         onCreate(db)
     }
 
-    // --- MÉTODOS DE AUTENTICACIÓN Y LOGIN CON HASH SHA-256 ---
+    // --- AUTENTICACIÓN PBKDF2 CON SAL ALEATORIA ---
 
-    fun hashSha256(plainText: String): String {
+    fun hasAnyUser(): Boolean {
+        val db = readableDatabase
+        val cursor = db.rawQuery("SELECT COUNT(*) FROM $TABLE_USERS", null)
+        var count = 0
+        if (cursor.moveToFirst()) {
+            count = cursor.getInt(0)
+        }
+        cursor.close()
+        return count > 0
+    }
+
+    private fun generateRandomSalt(): ByteArray {
+        val salt = ByteArray(16)
+        SecureRandom().nextBytes(salt)
+        return salt
+    }
+
+    private fun hashPbkdf2(password: String, salt: ByteArray): String {
         return try {
-            val digest = MessageDigest.getInstance("SHA-256")
-            val hashBytes = digest.digest(plainText.toByteArray(StandardCharsets.UTF_8))
-            val sb = StringBuilder()
-            for (b in hashBytes) {
-                sb.append(String.format("%02x", b))
-            }
-            sb.toString()
+            val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+            val spec = PBEKeySpec(password.toCharArray(), salt, PBKDF2_ITERATIONS, HASH_KEY_LENGTH)
+            val keyBytes = factory.generateSecret(spec).encoded
+            bytesToHex(keyBytes)
         } catch (e: Exception) {
-            plainText
+            e.printStackTrace()
+            password
         }
     }
 
-    fun authenticateUser(username: String, plainPassword: String): Boolean {
-        val inputHash = hashSha256(plainPassword)
-        val db = readableDatabase
-        val cursor = db.query(
-            TABLE_USERS,
-            arrayOf(COLUMN_USER_ID),
-            "$COLUMN_USERNAME = ? AND $COLUMN_PASSWORD_HASH = ?",
-            arrayOf(username, inputHash),
-            null,
-            null,
-            null
-        )
-        val isValid = cursor.count > 0
-        cursor.close()
-        return isValid
-    }
-
     fun registerUser(username: String, plainPassword: String): Boolean {
-        val passwordHash = hashSha256(plainPassword)
+        if (username.isBlank() || plainPassword.isBlank()) return false
+        val salt = generateRandomSalt()
+        val saltHex = bytesToHex(salt)
+        val passwordHash = hashPbkdf2(plainPassword, salt)
+
         val db = writableDatabase
         val values = ContentValues().apply {
             put(COLUMN_USERNAME, username)
             put(COLUMN_PASSWORD_HASH, passwordHash)
+            put(COLUMN_SALT, saltHex)
         }
         val result = db.insert(TABLE_USERS, null, values)
         return result != -1L
     }
 
-    // --- MÉTODOS DE HISTORIAL DE EVENTOS PERSISTENTE ---
+    fun authenticateUser(username: String, plainPassword: String): Boolean {
+        val db = readableDatabase
+        val cursor = db.query(
+            TABLE_USERS,
+            arrayOf(COLUMN_PASSWORD_HASH, COLUMN_SALT),
+            "$COLUMN_USERNAME = ?",
+            arrayOf(username),
+            null,
+            null,
+            null
+        )
+
+        if (!cursor.moveToFirst()) {
+            cursor.close()
+            return false
+        }
+
+        val storedHash = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_PASSWORD_HASH))
+        val storedSaltHex = cursor.getString(cursor.getColumnIndexOrThrow(COLUMN_SALT))
+        cursor.close()
+
+        val salt = hexToBytes(storedSaltHex)
+        val inputHash = hashPbkdf2(plainPassword, salt)
+
+        // Comparación de Hash en Tiempo Constante
+        return MessageDigest.isEqual(
+            inputHash.toByteArray(StandardCharsets.UTF_8),
+            storedHash.toByteArray(StandardCharsets.UTF_8)
+        )
+    }
+
+    // --- HISTORIAL DE EVENTOS ---
 
     fun insertEmergencyLog(log: EmergencyLog) {
         val db = writableDatabase
@@ -176,5 +206,24 @@ class AppDatabaseHelper(context: Context) : SQLiteOpenHelper(context, DATABASE_N
         }
         cursor.close()
         return logs
+    }
+
+    private fun bytesToHex(bytes: ByteArray): String {
+        val sb = StringBuilder()
+        for (b in bytes) {
+            sb.append(String.format("%02x", b))
+        }
+        return sb.toString()
+    }
+
+    private fun hexToBytes(hex: String): ByteArray {
+        val len = hex.length
+        val data = ByteArray(len / 2)
+        var i = 0
+        while (i < len) {
+            data[i / 2] = ((Character.digit(hex[i], 16) shl 4) + Character.digit(hex[i + 1], 16)).toByte()
+            i += 2
+        }
+        return data
     }
 }

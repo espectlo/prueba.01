@@ -43,13 +43,14 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun LoginScreen(
+    hasAnyUser: Boolean,
     onLoginSuccess: (String) -> Unit,
     onAuthenticateWithHash: (String, String) -> Boolean,
     onRegisterUser: (String, String) -> Boolean
 ) {
-    var username by remember { mutableStateOf("admin") }
-    var password by remember { mutableStateOf("admin123") }
-    var isRegisterMode by remember { mutableStateOf(false) }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var isRegisterMode by remember { mutableStateOf(!hasAnyUser) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var successMessage by remember { mutableStateOf<String?>(null) }
 
@@ -98,8 +99,8 @@ fun LoginScreen(
                 )
 
                 Text(
-                    text = if (isRegisterMode) "Crear nueva cuenta de operador" else "Inicio de Sesión Seguro (SQLite + SHA-256)",
-                    fontSize = 12.sp,
+                    text = if (isRegisterMode) "Crear cuenta de operador (Primer Uso / Configuración)" else "Inicio de Sesión Seguro (PBKDF2 + Sal 16 bytes)",
+                    fontSize = 11.sp,
                     color = Color.Gray,
                     modifier = Modifier.padding(bottom = 20.dp)
                 )
@@ -111,7 +112,7 @@ fun LoginScreen(
                         username = it
                         errorMessage = null
                     },
-                    label = { Text("Usuario") },
+                    label = { Text("Nombre de Operador") },
                     leadingIcon = { Icon(imageVector = Icons.Default.Person, contentDescription = null) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -169,7 +170,7 @@ fun LoginScreen(
                         if (isRegisterMode) {
                             val registered = onRegisterUser(username.trim(), password.trim())
                             if (registered) {
-                                successMessage = "Usuario registrado con HASH SHA-256 exitosamente."
+                                successMessage = "Cuenta creada con Hash PBKDF2 y Sal aleatoria."
                                 isRegisterMode = false
                             } else {
                                 errorMessage = "El usuario ya existe en SQLite."
@@ -190,26 +191,28 @@ fun LoginScreen(
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Text(
-                        text = if (isRegisterMode) "Registrar Cuenta" else "Iniciar Sesión",
+                        text = if (isRegisterMode) "Crear Cuenta de Operador" else "Iniciar Sesión",
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                if (hasAnyUser) {
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                TextButton(
-                    onClick = {
-                        isRegisterMode = !isRegisterMode
-                        errorMessage = null
-                        successMessage = null
+                    TextButton(
+                        onClick = {
+                            isRegisterMode = !isRegisterMode
+                            errorMessage = null
+                            successMessage = null
+                        }
+                    ) {
+                        Text(
+                            text = if (isRegisterMode) "¿Ya tienes cuenta? Inicia sesión" else "¿Nuevo operador? Crear cuenta",
+                            fontSize = 12.sp,
+                            color = Color(0xFF1976D2)
+                        )
                     }
-                ) {
-                    Text(
-                        text = if (isRegisterMode) "¿Ya tienes cuenta? Inicia sesión" else "¿Nuevo operador? Crear cuenta",
-                        fontSize = 12.sp,
-                        color = Color(0xFF1976D2)
-                    )
                 }
 
                 // Security Badge Footnote
@@ -232,7 +235,7 @@ fun LoginScreen(
                             modifier = Modifier.size(16.dp)
                         )
                         Text(
-                            text = " Contraseñas almacenadas en SQLite usando HASH SHA-256",
+                            text = " Contraseñas protegidas con PBKDF2 (10k iteraciones + Sal de 16B)",
                             fontSize = 10.sp,
                             color = Color(0xFF283593),
                             fontWeight = FontWeight.Medium

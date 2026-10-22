@@ -53,6 +53,7 @@ fun MainScreen(viewModel: MainViewModel) {
     // Si el usuario no se ha autenticado mediante Login en SQLite, muestra la pantalla de Inicio de Sesión
     if (!uiState.isLoggedIn) {
         LoginScreen(
+            hasAnyUser = viewModel.hasAnyUser(),
             onLoginSuccess = { _ -> },
             onAuthenticateWithHash = { username, password -> viewModel.login(username, password) },
             onRegisterUser = { username, password -> viewModel.registerUser(username, password) }

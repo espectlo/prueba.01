@@ -57,7 +57,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
-    private val _terminalLogs = MutableStateFlow<List<String>>(listOf("[SISTEMA] Cifrado ISO 27000 (AES-128/CRC32) Habilitado."))
+    private val _terminalLogs = MutableStateFlow<List<String>>(listOf("[SISTEMA] Cifrado ISO 27000 (AES-256-GCM / HMAC-SHA256) Habilitado."))
     val terminalLogs: StateFlow<List<String>> = _terminalLogs.asStateFlow()
 
     private var simulationJob: Job? = null
@@ -79,7 +79,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- AUTENTICACIÓN LOGIN CON HASH SHA-256 ---
+    // --- AUTENTICACIÓN LOGIN CON PBKDF2 + SAL ---
+
+    fun hasAnyUser(): Boolean = dbHelper.hasAnyUser()
 
     fun login(username: String, plainPassword: String): Boolean {
         val isValid = dbHelper.authenticateUser(username, plainPassword)
@@ -95,7 +97,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun registerUser(username: String, plainPassword: String): Boolean {
         val success = dbHelper.registerUser(username, plainPassword)
         if (success) {
-            addTerminalLog("[AUTENTICACIÓN] Registrado nuevo usuario en SQLite con HASH SHA-256: '$username'")
+            addTerminalLog("[AUTENTICACIÓN] Registrado nuevo usuario en SQLite con PBKDF2 y Sal: '$username'")
         }
         return success
     }
@@ -103,6 +105,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun logout() {
         _uiState.update { it.copy(isLoggedIn = false, currentUser = null) }
         addTerminalLog("[AUTENTICACIÓN] Sesión cerrada.")
+    }
+
+    fun updateMasterKey(newMasterKey: String) {
+        SecurityIso27000Manager.setMasterKey(newMasterKey)
+        addTerminalLog("[SEGURIDAD] Clave maestra de cifrado AES-256-GCM actualizada.")
     }
 
     private fun observeBluetooth() {
@@ -216,8 +223,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     state.copy(logs = allSaved, pendingOfflineCount = 0)
                 }
                 offlineRepository.clearPendingLogs()
-                addTerminalLog("[SINCRONIZACIÓN] Sincronizados $count eventos acumulados en SQLite y ESP32.")
-                bluetoothManager.sendCommand("SYNC_SUCCESS_COUNT=$count")
+                addTerminalLog("[REGISTRO LOCAL] Registrados $count eventos locales acumulados en la base de datos.")
+                bluetoothManager.sendCommand("SYNC_NOTIFY_COUNT=$count")
             } else {
                 refreshPendingOfflineCount()
             }
@@ -445,7 +452,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             message = message
         )
 
-        // Persistir inmediatamente en SQLite Database
         dbHelper.insertEmergencyLog(newLog)
 
         if (_uiState.value.connectionState != ConnectionState.CONNECTED) {

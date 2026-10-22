@@ -9,27 +9,36 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.ViewModelProvider
 import com.example.prueba01.ui.screens.MainScreen
 import com.example.prueba01.ui.theme.Prueba01Theme
 import com.example.prueba01.ui.viewmodel.MainViewModel
 
 class MainActivity : FragmentActivity() {
 
+    private lateinit var mainViewModel: MainViewModel
+
     private val requestMultiplePermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
-    ) { _ -> }
+    ) { permissions ->
+        val bluetoothGranted = (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) || (permissions[Manifest.permission.BLUETOOTH_CONNECT] == true)
+
+        if (bluetoothGranted && ::mainViewModel.isInitialized) {
+            mainViewModel.refreshBluetoothDevices()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        mainViewModel = ViewModelProvider(this)[MainViewModel::class.java]
+
         requestRequiredPermissions()
 
         setContent {
             Prueba01Theme {
-                val viewModel: MainViewModel = viewModel()
-                MainScreen(viewModel = viewModel)
+                MainScreen(viewModel = mainViewModel)
             }
         }
     }
