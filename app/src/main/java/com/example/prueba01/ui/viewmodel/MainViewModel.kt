@@ -21,8 +21,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.nio.charset.StandardCharsets
-import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -68,7 +66,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     init {
-        // Cargar clave maestra guardada en KeyStore/Prefs si existe
         val savedKey = keystoreRepository.getMasterKey()
         if (!savedKey.isNullOrBlank()) {
             SecurityIso27000Manager.setMasterKey(savedKey)
@@ -89,11 +86,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- VERIFICACIÓN DE PIN Y CLAVE MAESTRA ---
+    // --- VERIFICACIÓN Y CONFIGURACIÓN DE PIN ---
 
     fun verifySecurityPin(inputPin: String): Boolean {
-        // En ausencia de PIN personalizado guardado, valida "1234" inicial
-        return inputPin == "1234"
+        return keystoreRepository.verifyUserSecurityPin(inputPin)
     }
 
     fun updateMasterKey(newMasterKey: String) {
@@ -121,9 +117,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return isValid
     }
 
-    fun registerUser(username: String, plainPassword: String): Boolean {
+    fun registerUser(username: String, plainPassword: String, securityPin: String = "1234"): Boolean {
         val success = dbHelper.registerUser(username, plainPassword)
         if (success) {
+            keystoreRepository.saveUserSecurityPin(securityPin)
             addTerminalLog("[AUTENTICACIÓN] Registrado nuevo usuario en SQLite con PBKDF2 y Sal: '$username'")
         }
         return success
