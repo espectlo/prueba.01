@@ -5,11 +5,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.prueba01.bluetooth.BluetoothIoTManager
 import com.example.prueba01.bluetooth.ConnectionState
+import com.example.prueba01.data.db.AppDatabaseHelper
 import com.example.prueba01.data.model.DoorState
 import com.example.prueba01.data.model.EmergencyLog
 import com.example.prueba01.data.model.EventType
 import com.example.prueba01.data.model.Room
+import com.example.prueba01.data.repository.OfflineStorageRepository
 import com.example.prueba01.notification.EmergencyNotificationManager
+import com.example.prueba01.security.SecurityIso27000Manager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,7 +37,10 @@ data class UiState(
     val selectedTab: Int = 0,
     val isSimulationActive: Boolean = true,
     val selectedRoomIdForSim: String = "1",
-    val globalGasThreshold: Int = 1800
+    val globalGasThreshold: Int = 1800,
+    val pendingOfflineCount: Int = 0,
+    val isLoggedIn: Boolean = false,
+    val currentUser: String? = null
 )
 
 private data class AlarmEvaluationResult(
@@ -45,11 +51,13 @@ private data class AlarmEvaluationResult(
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val bluetoothManager = BluetoothIoTManager(application)
+    private val offlineRepository = OfflineStorageRepository(application)
+    private val dbHelper = AppDatabaseHelper(application)
 
     private val _uiState = MutableStateFlow(UiState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
 
-    private val _terminalLogs = MutableStateFlow<List<String>>(listOf("[SISTEMA] Inicializado correctamente. ESP32 DevKit V1 cargado."))
+    private val _terminalLogs = MutableStateFlow<List<String>>(listOf("[SISTEMA] Cifrado ISO 27000 (AES-128/CRC32) Habilitado."))
     val terminalLogs: StateFlow<List<String>> = _terminalLogs.asStateFlow()
 
     private var simulationJob: Job? = null
@@ -57,8 +65,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         EmergencyNotificationManager.createNotificationChannel(application)
+        loadPersistedLogsFromSQLite()
+        refreshPendingOfflineCount()
         observeBluetooth()
         startSimulationLoop()
+    }
+
+    private fun loadPersistedLogsFromSQLite() {
+        viewModelScope.launch {
+            val savedLogs = dbHelper.getAllEmergencyLogs()
+            _uiState.update { it.copy(logs = savedLogs) }
+            addTerminalLog("[BD SQLite] Cargados ${savedLogs.size} eventos guardados permanentemente.")
+        }
+    }
+
+    // --- AUTENTICACIÓN LOGIN CON HASH SHA-256 ---
+
+    fun login(username: String, plainPassword: String): Boolean {
+        val isValid = dbHelper.authenticateUser(username, plainPassword)
+        if (isValid) {
+            _uiState.update { it.copy(isLoggedIn = true, currentUser = username) }
+            addTerminalLog("[AUTENTICACIÓN] Inicio de sesión exitoso: usuario '$username'")
+        } else {
+            addTerminalLog("!! [AUTENTICACIÓN] Fallo de inicio de sesión: usuario '$username'")
+        }
+        return isValid
+    }
+
+    fun registerUser(username: String, plainPassword: String): Boolean {
+        val success = dbHelper.registerUser(username, plainPassword)
+        if (success) {
+            addTerminalLog("[AUTENTICACIÓN] Registrado nuevo usuario en SQLite con HASH SHA-256: '$username'")
+        }
+        return success
+    }
+
+    fun logout() {
+        _uiState.update { it.copy(isLoggedIn = false, currentUser = null) }
+        addTerminalLog("[AUTENTICACIÓN] Sesión cerrada.")
     }
 
     private fun observeBluetooth() {
@@ -66,6 +110,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             bluetoothManager.connectionState.collect { connState ->
                 _uiState.update { it.copy(connectionState = connState) }
                 addTerminalLog("[CONEXIÓN] Estado cambiado a: $connState")
+                if (connState == ConnectionState.CONNECTED) {
+                    syncPendingOfflineLogs()
+                }
             }
         }
 
@@ -155,6 +202,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             title = customTitle,
             message = "$message Puerta en ${room.name} abierta para evacuación."
         )
+    }
+
+    fun syncPendingOfflineLogs() {
+        viewModelScope.launch {
+            val pendingLogs = offlineRepository.getPendingOfflineLogs()
+            if (pendingLogs.isNotEmpty()) {
+                val count = pendingLogs.size
+                pendingLogs.forEach { log -> dbHelper.insertEmergencyLog(log) }
+
+                _uiState.update { state ->
+                    val allSaved = dbHelper.getAllEmergencyLogs()
+                    state.copy(logs = allSaved, pendingOfflineCount = 0)
+                }
+                offlineRepository.clearPendingLogs()
+                addTerminalLog("[SINCRONIZACIÓN] Sincronizados $count eventos acumulados en SQLite y ESP32.")
+                bluetoothManager.sendCommand("SYNC_SUCCESS_COUNT=$count")
+            } else {
+                refreshPendingOfflineCount()
+            }
+        }
+    }
+
+    private fun refreshPendingOfflineCount() {
+        val count = offlineRepository.getPendingOfflineLogs().size
+        _uiState.update { it.copy(pendingOfflineCount = count) }
     }
 
     fun setSimulatedGasValue(roomId: String, newGasValue: Int) {
@@ -341,8 +413,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun parseEsp32Data(rawData: String) {
         try {
-            if (rawData.contains("GAS:")) {
-                val parts = rawData.split(",")
+            val decryptedResult = SecurityIso27000Manager.decryptFrame(rawData)
+            if (!decryptedResult.isValid) {
+                addTerminalLog("!! [SEGURIDAD ISO 27000] Error de Integridad: ${decryptedResult.errorMessage}. Trama descartada.")
+                return
+            }
+
+            val payload = decryptedResult.payload
+            if (payload.contains("GAS:")) {
+                val parts = payload.split(",")
                 var gas = 0
                 parts.forEach { part ->
                     val kv = part.trim().split(":")
@@ -365,7 +444,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             gasLevel = gasLevel,
             message = message
         )
-        _uiState.update { it.copy(logs = listOf(newLog) + it.logs.take(19)) }
+
+        // Persistir inmediatamente en SQLite Database
+        dbHelper.insertEmergencyLog(newLog)
+
+        if (_uiState.value.connectionState != ConnectionState.CONNECTED) {
+            offlineRepository.savePendingOfflineLog(newLog)
+            refreshPendingOfflineCount()
+        }
+
+        val allLogs = dbHelper.getAllEmergencyLogs()
+        _uiState.update { it.copy(logs = allLogs) }
     }
 
     private fun addTerminalLog(msg: String) {

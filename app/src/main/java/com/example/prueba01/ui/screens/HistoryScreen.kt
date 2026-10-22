@@ -17,13 +17,18 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -38,7 +43,9 @@ import com.example.prueba01.data.model.EventType
 
 @Composable
 fun HistoryScreen(
-    logs: List<EmergencyLog>
+    logs: List<EmergencyLog>,
+    pendingOfflineCount: Int = 0,
+    onSyncNow: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -56,11 +63,63 @@ fun HistoryScreen(
                 modifier = Modifier.padding(end = 8.dp)
             )
             Text(
-                text = "Historial de Eventos de Emergencia (${logs.size})",
+                text = "Historial de Eventos (${logs.size})",
                 fontWeight = FontWeight.Bold,
                 fontSize = 18.sp,
                 color = Color.Black
             )
+        }
+
+        // Offline Storage & Sync Banner (Paso 5 - Guía Sumativa 3)
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = if (pendingOfflineCount > 0) Color(0xFFFFF3E0) else Color(0xFFE8F5E9)
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = if (pendingOfflineCount > 0) Icons.Default.CloudSync else Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = if (pendingOfflineCount > 0) Color(0xFFE65100) else Color(0xFF2E7D32),
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                    Column {
+                        Text(
+                            text = if (pendingOfflineCount > 0) "Almacenamiento Temporal Offline" else "Estado de Sincronización",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = if (pendingOfflineCount > 0) Color(0xFFE65100) else Color(0xFF2E7D32)
+                        )
+                        Text(
+                            text = if (pendingOfflineCount > 0) "$pendingOfflineCount eventos guardados localmente sin sincronizar." else "Todos los datos están sincronizados.",
+                            fontSize = 10.sp,
+                            color = Color.DarkGray
+                        )
+                    }
+                }
+
+                if (pendingOfflineCount > 0) {
+                    Button(
+                        onClick = onSyncNow,
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE65100)),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Sync, contentDescription = null, modifier = Modifier.padding(end = 4.dp).height(14.dp))
+                        Text(text = "Sincronizar", fontSize = 11.sp)
+                    }
+                }
+            }
         }
 
         if (logs.isEmpty()) {

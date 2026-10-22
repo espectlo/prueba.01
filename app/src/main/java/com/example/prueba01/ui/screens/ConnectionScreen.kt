@@ -1,5 +1,10 @@
 package com.example.prueba01.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,9 +22,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -29,14 +33,20 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.prueba01.bluetooth.BluetoothDeviceItem
 import com.example.prueba01.bluetooth.ConnectionState
 
@@ -50,6 +60,27 @@ fun ConnectionScreen(
     onConnectDevice: (String) -> Unit,
     onRefreshDevices: () -> Unit
 ) {
+    val context = LocalContext.current
+    var hasBluetoothPermission by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.BLUETOOTH_CONNECT
+                ) == PackageManager.PERMISSION_GRANTED
+            } else true
+        )
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasBluetoothPermission = isGranted
+        if (isGranted) {
+            onRefreshDevices()
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -66,8 +97,44 @@ fun ConnectionScreen(
             text = "Gestión de vinculación con el microcontrolador ESP32 DevKit V1.",
             fontSize = 12.sp,
             color = Color.Gray,
-            modifier = Modifier.padding(bottom = 16.dp)
+            modifier = Modifier.padding(bottom = 12.dp)
         )
+
+        // Security ISO 27000 Badge Card
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            shape = RoundedCornerShape(12.dp),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFE8EAF6))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = "ISO 27000",
+                    tint = Color(0xFF283593),
+                    modifier = Modifier.padding(end = 10.dp)
+                )
+                Column {
+                    Text(
+                        text = "Seguridad ISO 27000 / ISO 27001 Habilitada",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 12.sp,
+                        color = Color(0xFF283593)
+                    )
+                    Text(
+                        text = "Cifrado simétrico AES-128 + Suma de comprobación CRC32 para verificar integridad de datos.",
+                        fontSize = 10.sp,
+                        color = Color.DarkGray
+                    )
+                }
+            }
+        }
 
         // Connection Status Box
         Card(
@@ -154,7 +221,13 @@ fun ConnectionScreen(
                     ) {
                         Text(text = "Dispositivos Bluetooth Emparejados", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         OutlinedButton(
-                            onClick = onRefreshDevices,
+                            onClick = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hasBluetoothPermission) {
+                                    permissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
+                                } else {
+                                    onRefreshDevices()
+                                }
+                            },
                             shape = RoundedCornerShape(8.dp)
                         ) {
                             Icon(imageVector = Icons.Default.Refresh, contentDescription = "Actualizar")
@@ -163,7 +236,26 @@ fun ConnectionScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    if (pairedDevices.isEmpty()) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hasBluetoothPermission) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "Para escanear y conectar el ESP32 en Android 12+, se requiere el permiso BLUETOOTH_CONNECT.",
+                                fontSize = 12.sp,
+                                color = Color(0xFFD32F2F),
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                            Button(
+                                onClick = { permissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT) },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text(text = "Conceder Permiso Bluetooth", fontSize = 12.sp)
+                            }
+                        }
+                    } else if (pairedDevices.isEmpty()) {
                         Text(
                             text = "No se encontraron dispositivos Bluetooth emparejados. Por favor vincule el ESP32 en la configuración de Android.",
                             fontSize = 12.sp,
@@ -205,7 +297,7 @@ fun ConnectionScreen(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "Monitor Serial y Consola de Sistema",
+                    text = "Monitor Serial y Consola Cifrada",
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                     color = Color.LightGray
@@ -225,7 +317,7 @@ fun ConnectionScreen(
                                 text = logLine,
                                 color = when {
                                     logLine.contains("!!") -> Color(0xFFFF5252)
-                                    logLine.contains("[CMD]") -> Color(0xFF64B5F6)
+                                    logLine.contains("[CMD") -> Color(0xFF64B5F6)
                                     logLine.contains("[RX") -> Color(0xFF81C784)
                                     else -> Color(0xFFB0BEC5)
                                 },

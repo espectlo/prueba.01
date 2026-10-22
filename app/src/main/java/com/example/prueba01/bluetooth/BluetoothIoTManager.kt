@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothSocket
 import android.content.Context
+import com.example.prueba01.security.SecurityIso27000Manager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -58,16 +59,19 @@ class BluetoothIoTManager(context: Context) {
 
     @SuppressLint("MissingPermission")
     fun refreshPairedDevices() {
-        val adapter = BluetoothAdapter.getDefaultAdapter()
-        if (adapter != null && adapter.isEnabled) {
-            try {
+        try {
+            val adapter = BluetoothAdapter.getDefaultAdapter()
+            if (adapter != null && adapter.isEnabled) {
                 val devices = adapter.bondedDevices.map {
                     BluetoothDeviceItem(it.name ?: "Dispositivo Desconocido", it.address)
                 }
                 _pairedDevices.value = devices
-            } catch (e: SecurityException) {
+            } else {
                 _pairedDevices.value = emptyList()
             }
+        } catch (e: Throwable) {
+            // Previene cierres inesperados en Android 12+ si el permiso BLUETOOTH_CONNECT aún no fue concedido
+            _pairedDevices.value = emptyList()
         }
     }
 
@@ -75,13 +79,13 @@ class BluetoothIoTManager(context: Context) {
     fun connectToDevice(address: String) {
         managerScope.launch {
             _connectionState.value = ConnectionState.CONNECTING
-            val adapter = BluetoothAdapter.getDefaultAdapter()
-            if (adapter == null || !adapter.isEnabled) {
-                _connectionState.value = ConnectionState.SIMULATED
-                return@launch
-            }
-
             try {
+                val adapter = BluetoothAdapter.getDefaultAdapter()
+                if (adapter == null || !adapter.isEnabled) {
+                    _connectionState.value = ConnectionState.SIMULATED
+                    return@launch
+                }
+
                 val device: BluetoothDevice = adapter.getRemoteDevice(address)
                 socket = device.createRfcommSocketToServiceRecord(uuid)
                 socket?.connect()
@@ -90,7 +94,7 @@ class BluetoothIoTManager(context: Context) {
                 _connectionState.value = ConnectionState.CONNECTED
 
                 startListening()
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 disconnect()
                 _connectionState.value = ConnectionState.SIMULATED
             }
@@ -116,9 +120,9 @@ class BluetoothIoTManager(context: Context) {
                             _incomingData.emit(message)
                         }
                     } else {
-                        delay(250) // Evita ciclo activo consumo de CPU
+                        delay(250)
                     }
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     _connectionState.value = ConnectionState.SIMULATED
                     break
                 }
@@ -128,14 +132,15 @@ class BluetoothIoTManager(context: Context) {
 
     fun sendCommand(command: String) {
         managerScope.launch {
+            val encryptedFrame = SecurityIso27000Manager.encryptFrame(command)
             if (_connectionState.value == ConnectionState.CONNECTED) {
                 try {
-                    outputStream?.write((command + "\n").toByteArray())
-                } catch (e: Exception) {
+                    outputStream?.write((encryptedFrame + "\n").toByteArray())
+                } catch (e: Throwable) {
                     e.printStackTrace()
                 }
             } else {
-                _incomingData.emit("[SIMULADOR CMD] -> $command")
+                _incomingData.emit("[SIMULADOR CMD CIFRADO] -> $encryptedFrame")
             }
         }
     }
@@ -146,7 +151,7 @@ class BluetoothIoTManager(context: Context) {
             inputStream?.close()
             outputStream?.close()
             socket?.close()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
         } finally {
             socket = null
