@@ -1,6 +1,5 @@
 package com.example.prueba01.ui.components
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,6 +22,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -38,14 +38,16 @@ import androidx.compose.ui.unit.sp
 @Composable
 fun SecurityAuthDialog(
     actionTitle: String,
+    onVerifyPin: (String) -> Boolean,
     onAuthSuccess: () -> Unit,
     onDismiss: () -> Unit,
     onTriggerBiometric: () -> Unit = {}
 ) {
     var pinText by remember { mutableStateOf("") }
+    var failedAttempts by remember { mutableIntStateOf(0) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    val correctPin = "1234" // PIN de seguridad predeterminado del administrador
+    val isLockedOut = failedAttempts >= 3
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -73,7 +75,7 @@ fun SecurityAuthDialog(
                     color = Color.Black
                 )
                 Text(
-                    text = "Ingrese su PIN de Seguridad de 4 dígitos (Predeterminado: 1234) o use Biometría.",
+                    text = "Ingrese su PIN de Seguridad de 4 dígitos o use Biometría.",
                     fontSize = 12.sp,
                     color = Color.Gray,
                     modifier = Modifier.padding(top = 4.dp, bottom = 12.dp)
@@ -82,22 +84,31 @@ fun SecurityAuthDialog(
                 OutlinedTextField(
                     value = pinText,
                     onValueChange = {
-                        if (it.length <= 4) {
+                        if (it.length <= 4 && !isLockedOut) {
                             pinText = it
                             errorMessage = null
                         }
                     },
-                    label = { Text("PIN de 4 dígitos") },
+                    enabled = !isLockedOut,
+                    label = { Text(if (isLockedOut) "BLOQUEADO" else "PIN de 4 dígitos") },
                     leadingIcon = { Icon(imageVector = Icons.Default.Lock, contentDescription = null) },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                     singleLine = true,
-                    isError = errorMessage != null,
+                    isError = errorMessage != null || isLockedOut,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 )
 
-                if (errorMessage != null) {
+                if (isLockedOut) {
+                    Text(
+                        text = "🔒 Demasiados intentos fallidos (3/3). Acceso bloqueado temporalmente por seguridad.",
+                        color = Color(0xFFD32F2F),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 6.dp)
+                    )
+                } else if (errorMessage != null) {
                     Text(
                         text = errorMessage!!,
                         color = Color(0xFFD32F2F),
@@ -111,13 +122,14 @@ fun SecurityAuthDialog(
 
                 OutlinedButton(
                     onClick = onTriggerBiometric,
+                    enabled = !isLockedOut,
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(8.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Fingerprint,
                         contentDescription = "Biometría",
-                        tint = Color(0xFF1976D2),
+                        tint = if (isLockedOut) Color.Gray else Color(0xFF1976D2),
                         modifier = Modifier.padding(end = 6.dp)
                     )
                     Text(text = "Validar Huella Dactilar / Face ID", fontSize = 12.sp)
@@ -127,12 +139,16 @@ fun SecurityAuthDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (pinText == correctPin) {
+                    if (isLockedOut) return@Button
+                    val isCorrect = onVerifyPin(pinText)
+                    if (isCorrect) {
                         onAuthSuccess()
                     } else {
-                        errorMessage = "PIN incorrecto. Intente nuevamente."
+                        failedAttempts++
+                        errorMessage = "PIN incorrecto. Intentos fallidos: $failedAttempts/3"
                     }
                 },
+                enabled = !isLockedOut && pinText.length == 4,
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)),
                 shape = RoundedCornerShape(8.dp)
             ) {

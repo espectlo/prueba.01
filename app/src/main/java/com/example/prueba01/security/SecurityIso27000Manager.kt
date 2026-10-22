@@ -15,11 +15,14 @@ object SecurityIso27000Manager {
 
     private const val GCM_IV_LENGTH_BYTES = 12
     private const val GCM_TAG_LENGTH_BITS = 128
+    private const val PBKDF2_ITERATIONS = 100000 // 100,000 Iteraciones según recomendaciones NIST
 
-    // Monotonic counter to prevent replay attacks
-    private val sequenceCounter = AtomicLong(System.currentTimeMillis())
+    // Contador de secuencia de salida (Outbound Sequence Number)
+    private val outboundSequenceCounter = AtomicLong(System.currentTimeMillis())
 
-    // Configurable master key (Loaded from user settings / SharedPreferences)
+    // Registro estricto del último número de secuencia entrante recibido (Inbound Anti-Replay Verification)
+    private var lastReceivedSeqNum: Long = -1L
+
     private var masterKey: String = "UserConfiguredKey2026"
 
     private var aesKey: SecretKeySpec? = null
@@ -39,21 +42,22 @@ object SecurityIso27000Manager {
     fun getMasterKey(): String = masterKey
 
     /**
-     * Deriva dos claves independientes usando PBKDF2WithHmacSHA256 con sales distintas:
-     * 1. Clave de Cifrado AES-GCM (Confidencialidad + Autenticidad AEAD)
-     * 2. Clave de Firma HMAC-SHA256 (Firma adicional)
+     * Deriva dos claves independientes con PBKDF2 (100,000 iteraciones) y sales distintas:
+     * 1. Clave de Cifrado AES-256-GCM
+     * 2. Clave de Firma HMAC-SHA256 (Defensa en Profundidad)
      */
     private fun deriveKeys(password: String) {
         try {
-            val encSalt = "AES_GCM_SALT_2026".toByteArray(StandardCharsets.UTF_8)
-            val hmacSalt = "HMAC_SHA256_SALT_2026".toByteArray(StandardCharsets.UTF_8)
+            val encSalt = "AES_GCM_SALT_2026_SAFEDOOR".toByteArray(StandardCharsets.UTF_8)
+            val hmacSalt = "HMAC_SHA256_SALT_2026_SAFEDOOR".toByteArray(StandardCharsets.UTF_8)
 
-            val encFactory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
-            val encKeySpec = PBEKeySpec(password.toCharArray(), encSalt, 1000, 256)
-            aesKey = SecretKeySpec(encFactory.generateSecret(encKeySpec).encoded, "AES")
+            val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
 
-            val hmacKeySpec = PBEKeySpec(password.toCharArray(), hmacSalt, 1000, 256)
-            hmacKey = SecretKeySpec(encFactory.generateSecret(hmacKeySpec).encoded, "HmacSHA256")
+            val encSpec = PBEKeySpec(password.toCharArray(), encSalt, PBKDF2_ITERATIONS, 256)
+            aesKey = SecretKeySpec(factory.generateSecret(encSpec).encoded, "AES")
+
+            val hmacSpec = PBEKeySpec(password.toCharArray(), hmacSalt, PBKDF2_ITERATIONS, 256)
+            hmacKey = SecretKeySpec(factory.generateSecret(hmacSpec).encoded, "HmacSHA256")
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -65,15 +69,11 @@ object SecurityIso27000Manager {
         val errorMessage: String? = null
     )
 
-    /**
-     * Cifra mediante AES-256-GCM con IV aleatorio de 96 bits y firma HMAC-SHA256.
-     * Estructura: SEC_FRAME:<SEQ_NUM>:<IV_HEX>:<PAYLOAD_GCM_HEX>:<HMAC_SHA256_HEX>
-     */
     fun encryptFrame(plainText: String): String {
         val currentAesKey = aesKey ?: return plainText
 
         return try {
-            val seqNum = sequenceCounter.incrementAndGet()
+            val seqNum = outboundSequenceCounter.incrementAndGet()
 
             val iv = ByteArray(GCM_IV_LENGTH_BYTES)
             SecureRandom().nextBytes(iv)
@@ -87,7 +87,7 @@ object SecurityIso27000Manager {
             val hexIv = bytesToHex(iv)
             val hexPayload = bytesToHex(encryptedBytes)
 
-            // Firma HMAC-SHA256 adicional sobre (SeqNum + IV + Payload)
+            // Firma HMAC-SHA256 sobre (SeqNum + IV + Payload) - Defensa en Profundidad
             val dataToSign = "$seqNum:$hexIv:$hexPayload"
             val hmacSignature = calculateHmacSha256Hex(dataToSign)
 
@@ -99,10 +99,9 @@ object SecurityIso27000Manager {
     }
 
     /**
-     * RECHAZO ESTRICTO: Si la trama no empieza por SEC_FRAME: o falla la autenticidad/firma, es RECHAZADA.
+     * Descifrado y Verificación Anti-Replay Estricta sobre Tramas Entrantes.
      */
     fun decryptFrame(rawFrame: String): DecryptedFrameResult {
-        // RECHAZO ESTRICTO DE TEXTO PLANO
         if (!rawFrame.startsWith("SEC_FRAME:")) {
             return DecryptedFrameResult(
                 isValid = false,
@@ -120,14 +119,23 @@ object SecurityIso27000Manager {
             )
         }
 
-        val seqNum = parts[1].toLongOrNull()
+        val incomingSeqNum = parts[1].toLongOrNull()
             ?: return DecryptedFrameResult(isValid = false, payload = "", errorMessage = "REJECTED: Número de secuencia no válido.")
         val hexIv = parts[2]
         val hexPayload = parts[3]
         val expectedHmacHex = parts[4]
 
-        // 1. Verificación de Firma HMAC-SHA256 en TIEMPO CONSTANTE (MessageDigest.isEqual)
-        val dataToVerify = "$seqNum:$hexIv:$hexPayload"
+        // 1. Verificación Estricta Anti-Replay (Número de secuencia estrictamente creciente)
+        if (incomingSeqNum <= lastReceivedSeqNum) {
+            return DecryptedFrameResult(
+                isValid = false,
+                payload = "",
+                errorMessage = "REJECTED (Anti-Replay Attack): Número de secuencia $incomingSeqNum <= $lastReceivedSeqNum (Trama retransmitida)."
+            )
+        }
+
+        // 2. Verificación de Firma HMAC-SHA256 en TIEMPO CONSTANTE (MessageDigest.isEqual)
+        val dataToVerify = "$incomingSeqNum:$hexIv:$hexPayload"
         val calculatedHmacHex = calculateHmacSha256Hex(dataToVerify)
 
         val expectedHmacBytes = hexToBytes(expectedHmacHex)
@@ -141,7 +149,10 @@ object SecurityIso27000Manager {
             )
         }
 
-        // 2. Descifrado Autenticado AES-256-GCM
+        // Actualizar último número de secuencia válido
+        lastReceivedSeqNum = incomingSeqNum
+
+        // 3. Descifrado Autenticado AES-256-GCM
         val currentAesKey = aesKey ?: return DecryptedFrameResult(isValid = false, payload = "", errorMessage = "Clave AES no inicializada.")
 
         return try {

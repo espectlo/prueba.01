@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
@@ -30,6 +31,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -56,11 +58,16 @@ fun ConnectionScreen(
     isSimulationActive: Boolean,
     pairedDevices: List<BluetoothDeviceItem>,
     terminalLogs: List<String>,
+    currentMasterKey: String,
+    onSaveMasterKey: (String) -> Unit,
     onToggleSimulation: (Boolean) -> Unit,
     onConnectDevice: (String) -> Unit,
     onRefreshDevices: () -> Unit
 ) {
     val context = LocalContext.current
+    var inputMasterKey by remember { mutableStateOf(currentMasterKey) }
+    var keySavedMessage by remember { mutableStateOf<String?>(null) }
+
     var hasBluetoothPermission by remember {
         mutableStateOf(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -128,10 +135,71 @@ fun ConnectionScreen(
                         color = Color(0xFF283593)
                     )
                     Text(
-                        text = "Cifrado simétrico AES-128 + Suma de comprobación CRC32 para verificar integridad de datos.",
+                        text = "Cifrado AES-256-GCM (100k PBKDF2) + Firma HMAC-SHA256 + Verificación Anti-Replay.",
                         fontSize = 10.sp,
                         color = Color.DarkGray
                     )
+                }
+            }
+        }
+
+        // Configuración de Clave Maestra de Cifrado
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "Configuración de Clave Maestra Criptográfica",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                Text(
+                    text = "Defina la clave compartida para derivar las llaves AES-256 y HMAC con el ESP32. Guardada de forma segura en KeyStore.",
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                    modifier = Modifier.padding(top = 2.dp, bottom = 12.dp)
+                )
+
+                OutlinedTextField(
+                    value = inputMasterKey,
+                    onValueChange = {
+                        inputMasterKey = it
+                        keySavedMessage = null
+                    },
+                    label = { Text("Clave Maestra Secreta") },
+                    leadingIcon = { Icon(imageVector = Icons.Default.Key, contentDescription = null) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp)
+                )
+
+                if (keySavedMessage != null) {
+                    Text(
+                        text = keySavedMessage!!,
+                        color = Color(0xFF2E7D32),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Button(
+                    onClick = {
+                        onSaveMasterKey(inputMasterKey.trim())
+                        keySavedMessage = "Clave Maestra guardada y aplicada en KeyStore."
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1976D2)),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Text(text = "Guardar en KeyStore", fontSize = 12.sp)
                 }
             }
         }

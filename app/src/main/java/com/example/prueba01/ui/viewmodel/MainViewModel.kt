@@ -10,6 +10,7 @@ import com.example.prueba01.data.model.DoorState
 import com.example.prueba01.data.model.EmergencyLog
 import com.example.prueba01.data.model.EventType
 import com.example.prueba01.data.model.Room
+import com.example.prueba01.data.repository.EncryptedKeyStoreRepository
 import com.example.prueba01.data.repository.OfflineStorageRepository
 import com.example.prueba01.notification.EmergencyNotificationManager
 import com.example.prueba01.security.SecurityIso27000Manager
@@ -20,6 +21,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -52,6 +55,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val bluetoothManager = BluetoothIoTManager(application)
     private val offlineRepository = OfflineStorageRepository(application)
+    private val keystoreRepository = EncryptedKeyStoreRepository(application)
     private val dbHelper = AppDatabaseHelper(application)
 
     private val _uiState = MutableStateFlow(UiState())
@@ -64,6 +68,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
     init {
+        // Cargar clave maestra guardada en KeyStore/Prefs si existe
+        val savedKey = keystoreRepository.getMasterKey()
+        if (!savedKey.isNullOrBlank()) {
+            SecurityIso27000Manager.setMasterKey(savedKey)
+        }
+
         EmergencyNotificationManager.createNotificationChannel(application)
         loadPersistedLogsFromSQLite()
         refreshPendingOfflineCount()
@@ -78,6 +88,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             addTerminalLog("[BD SQLite] Cargados ${savedLogs.size} eventos guardados permanentemente.")
         }
     }
+
+    // --- VERIFICACIÓN DE PIN Y CLAVE MAESTRA ---
+
+    fun verifySecurityPin(inputPin: String): Boolean {
+        // En ausencia de PIN personalizado guardado, valida "1234" inicial
+        return inputPin == "1234"
+    }
+
+    fun updateMasterKey(newMasterKey: String) {
+        if (newMasterKey.isNotBlank()) {
+            keystoreRepository.saveMasterKey(newMasterKey)
+            SecurityIso27000Manager.setMasterKey(newMasterKey)
+            addTerminalLog("[SEGURIDAD] Clave Maestra de Cifrado guardada en KeyStore y actualizada.")
+        }
+    }
+
+    fun getMasterKey(): String = SecurityIso27000Manager.getMasterKey()
 
     // --- AUTENTICACIÓN LOGIN CON PBKDF2 + SAL ---
 
@@ -105,11 +132,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun logout() {
         _uiState.update { it.copy(isLoggedIn = false, currentUser = null) }
         addTerminalLog("[AUTENTICACIÓN] Sesión cerrada.")
-    }
-
-    fun updateMasterKey(newMasterKey: String) {
-        SecurityIso27000Manager.setMasterKey(newMasterKey)
-        addTerminalLog("[SEGURIDAD] Clave maestra de cifrado AES-256-GCM actualizada.")
     }
 
     private fun observeBluetooth() {

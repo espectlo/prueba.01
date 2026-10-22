@@ -74,6 +74,7 @@ fun MainScreen(viewModel: MainViewModel) {
     pendingAuth?.let { auth ->
         SecurityAuthDialog(
             actionTitle = auth.title,
+            onVerifyPin = { pin -> viewModel.verifySecurityPin(pin) },
             onAuthSuccess = {
                 auth.action()
                 pendingAuth = null
@@ -218,6 +219,8 @@ fun MainScreen(viewModel: MainViewModel) {
                         isSimulationActive = uiState.isSimulationActive,
                         pairedDevices = pairedDevices,
                         terminalLogs = terminalLogs,
+                        currentMasterKey = viewModel.getMasterKey(),
+                        onSaveMasterKey = { newKey -> viewModel.updateMasterKey(newKey) },
                         onToggleSimulation = { viewModel.toggleSimulationMode(it) },
                         onConnectDevice = { viewModel.connectToBluetoothDevice(it) },
                         onRefreshDevices = { viewModel.refreshBluetoothDevices() }
